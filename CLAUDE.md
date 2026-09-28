@@ -26,22 +26,43 @@ This is a **Super Productivity plugin** — a sandboxed iframe widget. All UI lo
 ### Two-file plugin model
 
 - **`sp-dashboard/plugin.js`** — runs in the host app context. Registers an ACTION Redux hook with `PluginAPI.addEventListener`, then fires a `postMessage` to the iframe on every state change. This is the only bridge between the host app and the UI.
-- **`sp-dashboard/index.html`** — runs in an isolated iframe. Receives `SP_STATE_CHANGED` messages and pulls fresh data via `PluginAPI.getTasks()` / `getArchivedTasks()` / `getAllProjects()`. All rendering, state, and logic lives here.
+- **`sp-dashboard/index.html`** — runs in an isolated iframe. Receives `SP_STATE_CHANGED` messages and pulls fresh data via `PluginAPI.getTasks()` / `getArchivedTasks()` / `getAllProjects()` / `getAllSimpleCounters()`. All rendering, state, and logic lives here.
 
 Available PluginAPI methods (beyond data fetching): `showSnack({ msg, ico })` for toast notifications, `getStorage()` / `setStorage(data)` for persistence (declared in manifest but currently unused).
+
+`getAllSimpleCounters()` was added to the host app's PluginAPI after this plugin's `minSupVersion`, so it is feature-detected (`typeof window.PluginAPI.getAllSimpleCounters === 'function'`) rather than assumed — on an older host the Habits tab just renders empty instead of throwing.
 
 ### Data flow inside index.html
 
 ```
-postMessage → loadData() → PluginAPI calls → cachedTasks / cachedProjects
-  → processData(tasks, projects, dateRange) → metrics object
+postMessage → loadData() → PluginAPI calls → cachedTasks / cachedProjects / cachedHabits
+  → processData(tasks, projects, tags, habits) → metrics object
     → updateDashboardUI()   (stat cards)
     → updateBarChart()      (weekly time, CSS flex bars)
     → updatePieChart()      (project breakdown, CSS conic-gradient)
     → renderTable()         (detailed entries, sortable)
+    → updateHabitsUI()      (Habits tab: stat cards + per-habit table)
 ```
 
 `processData()` is the core aggregation function. It deduplicates active + archived tasks (Map by ID, active takes precedence), filters by date range, and computes: time spent, completion counts, overdue/late flags, per-day breakdowns, and per-project summaries.
+
+### Habits
+
+"Habits" in Super Productivity's UI are the host app's **Simple Counter** feature
+(`PluginAPI.getAllSimpleCounters()`); there is no separate "Habit" type. The Habits tab
+(`view-habits`) is populated by `buildHabitsData()`, which is independent of task filtering
+settings (excluded projects/tags, `minEntryMs`, etc. — those are task-only concepts).
+
+Two time semantics are intentionally kept separate and must not be conflated:
+- **Current streak** (`getHabitStreak()`) is always computed as of *today*, regardless of the
+  dashboard's selected date range — this mirrors the host app's own
+  `getSimpleCounterStreakDuration()` (`super-productivity/src/app/features/simple-counter/`)
+  exactly, so the number shown here always matches the host app's Habit Tracker.
+- **Completion rate / totals** per habit are scoped to the selected date range, using
+  `isHabitDayApplicable()` to respect a habit's specific-weekday configuration.
+
+If the host's streak algorithm ever changes, re-port it from that source rather than
+hand-tweaking `getHabitStreak()` in isolation.
 
 ### Settings
 
@@ -123,6 +144,17 @@ All colors are CSS custom properties (`--bg`, `--text-color`, `--c-primary`, etc
 ### Build pipeline
 
 `make build` runs: template substitution on `manifest.json.template` (injects VERSION/DESCRIPTION) → `scripts/minify.sh` (html-minifier-terser) → zip packaging. Version is the single source of truth in `package.json`.
+
+The host app caps `index.html` at 100KB (`MAX_PLUGIN_MANIFEST_SIZE`, reused from the manifest-size
+check — see `plugin.service.ts` in the host app). `scripts/minify.sh` mangles top-level JS names
+(`mangle.toplevel`) to stay under that, which is only safe because every function called from an
+inline `onclick`/`onchange` attribute (`switchTab`, `setDrillDimension`, `setDrillEntity`) is also
+explicitly exposed as `window.<name> = <name>` at the bottom of the script — a mangled top-level
+declaration still resolves through that `window` property when the inline attribute calls it by its
+original name. **A new inline event-handler attribute must add its function to that `window.*`
+list**, or mangling will silently break it in the shipped build without any test catching it (the
+test suite runs against the unminified source). Run `wc -c build/sp-dashboard/index.html` after
+`make build` and keep comfortable headroom under 102400 bytes.
 
 ## Testing
 

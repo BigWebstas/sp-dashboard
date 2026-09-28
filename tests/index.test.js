@@ -1463,4 +1463,143 @@ describe('Date Range Reporter UI', () => {
       });
     });
   });
+
+  describe('Habits', () => {
+    const todayStr = toLocalDate(new Date());
+
+    it('buildHabitsData excludes disabled habits', () => {
+      const habits = [
+        { id: 'h1', title: 'Enabled', type: 'ClickCounter', isEnabled: true, countOnDay: {} },
+        { id: 'h2', title: 'Disabled', type: 'ClickCounter', isEnabled: false, countOnDay: {} }
+      ];
+      const data = window.buildHabitsData(habits, [todayStr]);
+      expect(data).toHaveLength(1);
+      expect(data[0].title).toBe('Enabled');
+    });
+
+    it('buildHabitsData computes completion rate over the given date range', () => {
+      const habit = {
+        id: 'h1', title: 'Stretch', type: 'ClickCounter', isEnabled: true,
+        isTrackStreaks: true, streakMinValue: 1,
+        countOnDay: { '2026-03-01': 1, '2026-03-03': 1 }
+      };
+      const range = ['2026-03-01', '2026-03-02', '2026-03-03', '2026-03-04'];
+      const data = window.buildHabitsData([habit], range);
+      expect(data[0].applicableDays).toBe(4);
+      expect(data[0].completedDays).toBe(2);
+      expect(data[0].completionRate).toBe(0.5);
+    });
+
+    it('buildHabitsData only counts specific-days habits on their configured weekdays', () => {
+      // Every date in range is a Sunday (dow 0); only Wednesday (3) is configured.
+      const habit = {
+        id: 'h1', title: 'Wednesdays Only', type: 'ClickCounter', isEnabled: true,
+        isTrackStreaks: true, streakMinValue: 1, streakMode: 'specific-days',
+        streakWeekDays: { 3: true },
+        countOnDay: {}
+      };
+      const range = ['2026-03-01', '2026-03-08']; // both Sundays
+      const data = window.buildHabitsData([habit], range);
+      expect(data[0].applicableDays).toBe(0);
+      expect(data[0].completionRate).toBe(0);
+    });
+
+    it('getHabitStreak counts consecutive days for a specific-days habit, tolerating a missing today', () => {
+      vi.useFakeTimers({ now: new Date('2026-03-25T12:00:00').getTime() });
+      const yesterday = toLocalDate(new Date(Date.now() - 86400000));
+      const twoDaysAgo = toLocalDate(new Date(Date.now() - 2 * 86400000));
+      const habit = {
+        isTrackStreaks: true, streakMinValue: 1, streakMode: 'specific-days',
+        streakWeekDays: { 0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true },
+        countOnDay: { [yesterday]: 1, [twoDaysAgo]: 1 } // today not logged yet
+      };
+      expect(window.getHabitStreak(habit)).toBe(2);
+      vi.useRealTimers();
+    });
+
+    it('getHabitStreak returns 0 once the streak is actually broken', () => {
+      vi.useFakeTimers({ now: new Date('2026-03-25T12:00:00').getTime() });
+      const threeDaysAgo = toLocalDate(new Date(Date.now() - 3 * 86400000));
+      const habit = {
+        isTrackStreaks: true, streakMinValue: 1, streakMode: 'specific-days',
+        streakWeekDays: { 0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true },
+        countOnDay: { [threeDaysAgo]: 1 } // gap of two days before today
+      };
+      expect(window.getHabitStreak(habit)).toBe(0);
+      vi.useRealTimers();
+    });
+
+    it('getHabitStreak handles weekly-frequency mode by counting this week’s completions', () => {
+      const now = new Date('2026-03-25T12:00:00'); // Wednesday
+      vi.useFakeTimers({ now: now.getTime() });
+      const day = now.getDay();
+      const monday = new Date(now);
+      monday.setDate(monday.getDate() - (day === 0 ? 6 : day - 1));
+      const dayStr = (offset) => toLocalDate(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + offset));
+      const habit = {
+        isTrackStreaks: true, streakMinValue: 1, streakMode: 'weekly-frequency', streakWeeklyFrequency: 3,
+        countOnDay: { [dayStr(0)]: 1, [dayStr(1)]: 1, [dayStr(2)]: 1 } // Mon, Tue, Wed
+      };
+      expect(window.getHabitStreak(habit)).toBe(3);
+      vi.useRealTimers();
+    });
+
+    it('processData populates habit metrics and renders the Habits tab', () => {
+      const habits = [
+        { id: 'h1', title: 'Drink Water', type: 'ClickCounter', isEnabled: true,
+          isTrackStreaks: true, streakMinValue: 1, countOnDay: { [todayStr]: 1 } },
+        { id: 'h2', title: 'Disabled Habit', type: 'ClickCounter', isEnabled: false, countOnDay: {} }
+      ];
+      window.processData([], [], [], habits);
+      expect(window.latestMetrics.habitsTotalActive).toBe(1);
+      expect(window.latestMetrics.habitsCompletedToday).toBe(1);
+
+      window.switchTab('habits');
+      expect(document.getElementById('view-habits').classList.contains('hidden')).toBe(false);
+      expect(document.getElementById('tab-btn-habits').classList.contains('active')).toBe(true);
+      expect(document.getElementById('habit-stat-total').textContent).toBe('1');
+      expect(document.getElementById('habit-stat-today').textContent).toBe('1');
+
+      const rows = document.querySelectorAll('#habits-table-body tr');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].textContent).toContain('Drink Water');
+    });
+
+    it('shows an empty state when there are no habits', () => {
+      window.processData([], [], [], []);
+      const rows = document.querySelectorAll('#habits-table-body tr');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].textContent).toContain('No habits found');
+    });
+
+    it('shows an unsupported-host message instead of "no habits" when the host lacks getAllSimpleCounters', () => {
+      window.setHabitsApiSupported(false);
+      window.processData([], [], [], []);
+      const rows = document.querySelectorAll('#habits-table-body tr');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].textContent).not.toContain('No habits found');
+      expect(rows[0].textContent).toContain("doesn't expose habit data");
+      window.setHabitsApiSupported(true);
+    });
+
+    it('buildTextSummary(habits) includes headline stats and a per-habit row', () => {
+      const habits = [{ id: 'h1', title: 'Drink Water', type: 'ClickCounter', isEnabled: true,
+        isTrackStreaks: true, streakMinValue: 1, countOnDay: { [todayStr]: 1 } }];
+      window.processData([], [], [], habits);
+      const summary = window.buildTextSummary('habits');
+      expect(summary).toContain('Habits');
+      expect(summary).toContain('Drink Water');
+    });
+
+    it('CSV summary for habits lists a header row and one row per habit', () => {
+      window.setSetting('summaryFormat', 'csv');
+      const habits = [{ id: 'h1', title: 'Drink Water', type: 'ClickCounter', isEnabled: true,
+        isTrackStreaks: true, streakMinValue: 1, countOnDay: { [todayStr]: 1 } }];
+      window.processData([], [], [], habits);
+      const csv = window.buildTextSummary('habits');
+      const lines = csv.split('\n');
+      expect(lines[0]).toBe('Habit,Type,Current Streak,Done Today,Completion (period),Total (period)');
+      expect(lines[1]).toContain('Drink Water');
+    });
+  });
 });

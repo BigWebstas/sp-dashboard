@@ -10,6 +10,7 @@ A lightweight dashboard plugin for [Super Productivity](https://super-productivi
 - **Dashboard** — key metrics (time tracked, tasks completed, overdue, late), daily trend bar chart, and project/tag breakdown pie chart
 - **Detailed List** — sortable table of every time entry with project, task, duration, and status
 - **By Project / Tag** — drill into any project or tag for dedicated stats, a daily trend chart, and a filtered task list
+- **Habits** — current streak, today's status, and completion rate for each habit in Super Productivity's Habit Tracker
 - Live updates whenever task data changes in Super Productivity
 - Adapts to light and dark themes automatically
 - **Settings** — a gear in the tab bar opens six panels of configuration (below)
