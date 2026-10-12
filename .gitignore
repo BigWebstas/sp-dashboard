@@ -8,3 +8,6 @@ coverage/
 dist/
 .DS_Store
 build/
+GEMINI.md
+.idea/
+CLAUDE.md
